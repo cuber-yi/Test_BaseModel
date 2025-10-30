@@ -1,0 +1,21 @@
+# 1. 模型超参数
+config:
+  seq_len: 100
+  pred_len: 100
+  patch_len: 10
+  stride: 5
+  padding_patch: 'end'
+  revin: 1
+  ma_type: 'ema'
+  alpha: 0.3
+  beta: 0.3
+
+# 2. 模型参数划分规则
+partition:
+  name_maps:
+    'net.fc8': 'personal'
+    'net.fc7': 'trend'
+    'net.fc6': 'trend'
+    'net.fc5': 'trend'
+    'net.': 'season'
+  default_partition: 'season'

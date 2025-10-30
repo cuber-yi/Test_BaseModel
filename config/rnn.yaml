@@ -1,0 +1,10 @@
+# 1. 模型超参数
+config:
+  hidden_size: 128
+  num_layers: 2
+
+# 2. 模型参数划分规则
+partition:
+  name_maps:
+    'personal_head.': 'personal'
+  default_partition: 'trend'
