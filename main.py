@@ -5,9 +5,7 @@ import copy
 import pandas as pd
 import os
 import datetime
-from collections import OrderedDict
 from utils.config_utils import load_config
-from utils.model_utils import partition_model
 from utils.data_loader import load_battery_data, preprocess_data, create_windowed_dataset
 from utils.reporting_utils import save_summary_report
 from client import Client
@@ -104,20 +102,17 @@ def main():
     os.makedirs(os.path.join(save_dir, 'plots'), exist_ok=True)
     print(f"Results will be saved in: {save_dir}")
 
-    # --- 准备数据和客户端 ---
+    # --- 准备数据和客户端 (这部分逻辑不变) ---
     data_mode = config['data'].get('mode', 'multi_file')
 
     if data_mode == 'single_file_multi_client':
-        # 单个文件，每个Sheet一个客户端
         print(f"\n{'=' * 50}")
         print("Data Loading Mode: Single File, Multiple Clients (one client per sheet)")
         print(f"{'=' * 50}\n")
-
         single_file_path = config['data'].get('single_file', None)
         if not single_file_path:
             print("Error: 'single_file' not specified in config for 'single_file_multi_client' mode.")
             return
-
         client_dataloaders = setup_clients_by_sheet(
             file_path=single_file_path,
             window_size=config['data']['window_size'],
@@ -126,11 +121,9 @@ def main():
             max_capacity=config['data']['max_capacity']
         )
     else:
-        # 多个文件，每个文件一个客户端
         print(f"\n{'=' * 50}")
         print("Data Loading Mode: Multiple Files (one client per file)")
         print(f"{'=' * 50}\n")
-
         client_dataloaders = setup_clients_by_file(
             file_paths=config['data']['files'],
             window_size=config['data']['window_size'],
@@ -145,7 +138,7 @@ def main():
     num_total_clients = len(client_dataloaders)
     print(f"\nTotal number of clients created: {num_total_clients}")
 
-    # 初始化Client和Server实例，传入完整的config对象
+    # 初始化Client和Server实例
     clients = [Client(client_id=i, dataloader=dl, config=config, device=device) for
                i, dl in enumerate(client_dataloaders)]
     server = Server(config=config, device=device)
@@ -155,46 +148,39 @@ def main():
     for comm_round in range(num_rounds):
         print(f"\n{'=' * 20} Communication Round {comm_round + 1}/{num_rounds} {'=' * 20}")
 
-        # --- 模型划分与分发 ---
-        partitions = partition_model(server.global_model, config['model']['partition'])
-        global_trend_state = partitions.get('trend', {}).get('state_dict', OrderedDict())
-        global_season_state = partitions.get('season', {}).get('state_dict', OrderedDict())
-
-        client_trend_updates, client_season_updates = [], []
+        # --- 模型分发 ---
+        global_model_state = server.global_model.state_dict()
+        client_updates = []
 
         # --- 客户端本地训练与更新计算 ---
         for client in clients:
-            client.set_global_model(copy.deepcopy(global_trend_state), copy.deepcopy(global_season_state))
+            # 客户端接收完整的全局模型
+            client.set_global_model(copy.deepcopy(global_model_state))
             client.local_train()
-            delta_trend, delta_season = client.compute_update()
-            client_trend_updates.append(delta_trend)
-            client_season_updates.append(delta_season)
+            # 客户端计算完整的模型更新
+            delta = client.compute_update()
+            client_updates.append(delta)
 
         # --- 服务器端聚合 ---
-        agg_trend_delta, agg_season_delta = server.aggregate_updates(
-            client_trend_updates, client_season_updates
-        )
+        agg_delta = server.aggregate_updates(client_updates)
         # 更新全局模型
-        server.update_global_model(agg_trend_delta, agg_season_delta)
+        server.update_global_model(agg_delta)
 
     print("\nFederated learning process finished.")
 
-    # --- 个性化训练与评估 ---
-    print(f"\n{'=' * 20} Starting Personalization Phase {'=' * 20}")
-    # 获取最终的全局模型并分发
-    final_partitions = partition_model(server.global_model, config['model']['partition'])
-    final_global_trend = final_partitions.get('trend', {}).get('state_dict', OrderedDict())
-    final_global_season = final_partitions.get('season', {}).get('state_dict', OrderedDict())
-
+    # --- 最终评估 ---
+    print(f"\n{'=' * 20} Starting Final Evaluation Phase {'=' * 20}")
+    # 获取最终的全局模型并分发给客户端进行评估
+    final_global_model_state = server.global_model.state_dict()
     for client in clients:
-        client.set_global_model(copy.deepcopy(final_global_trend), copy.deepcopy(final_global_season))
+        client.set_global_model(copy.deepcopy(final_global_model_state))
 
     all_metrics = []
     for client in clients:
-        mae, rmse = client.personalize_and_evaluate(save_dir=save_dir)
+        mae, rmse = client.evaluate(save_dir=save_dir) # 调用新的评估函数
         all_metrics.append({'client_id': client.client_id, 'MAE': mae, 'RMSE': rmse})
 
-    # --- 6. 打印最终结果摘要 ---
+    # --- 打印最终结果摘要 ---
     print(f"\n{'=' * 20} Final Evaluation Summary {'=' * 20}")
     avg_mae = np.mean([m['MAE'] for m in all_metrics])
     avg_rmse = np.mean([m['RMSE'] for m in all_metrics])
@@ -202,7 +188,7 @@ def main():
         print(f"Client {metrics['client_id']}: MAE = {metrics['MAE']:.4f}, RMSE = {metrics['RMSE']:.4f}")
     print(f"\nAverage across all clients: MAE = {avg_mae:.4f}, RMSE = {avg_rmse:.4f}")
 
-    # --- 7. 保存摘要 ---
+    # --- 保存摘要 ---
     avg_metrics = {'MAE': avg_mae, 'RMSE': avg_rmse}
     save_summary_report(save_dir=save_dir, all_metrics=all_metrics, avg_metrics=avg_metrics)
 

@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 from collections import OrderedDict
 from utils.model_utils import get_model_class
 
@@ -16,50 +15,39 @@ class Server:
         self.global_model = ModelClass(**model_params).to(self.device)
         print(f"Server initialized with model: {model_name}")
 
-
-    def aggregate_updates(self, trend_updates: list, season_updates: list):
-        if not trend_updates and not season_updates:
+    def aggregate_updates(self, client_updates: list):
+        """
+        使用FedAvg聚合所有客户端的完整模型更新。
+        """
+        if not client_updates:
             print("No updates received. Skipping aggregation.")
-            return None, None
+            return None
 
-        print("--- Aggregating updates with standard FedAvg ---")
+        print(f"--- Aggregating updates from {len(client_updates)} clients with standard FedAvg ---")
 
-        agg_trend_delta, agg_season_delta = OrderedDict(), OrderedDict()
+        # 初始化一个空的聚合delta
+        agg_delta = OrderedDict()
 
-        # --- 聚合趋势组件更新 ---
-        valid_trend_updates = [u for u in trend_updates if u]
-        if valid_trend_updates:
-            num_clients = len(valid_trend_updates)
-            print(f"Aggregating trend updates from {num_clients} clients.")
-            for key in valid_trend_updates[0].keys():
-                # 简单平均
-                aggregated_tensor = torch.stack([u[key] for u in valid_trend_updates]).mean(dim=0)
-                agg_trend_delta[key] = aggregated_tensor.to(self.device)
+        # 获取第一个客户端更新的所有键
+        sample_update = client_updates[0]
+        keys = sample_update.keys()
 
-        # --- 聚合季节组件更新 ---
-        valid_season_updates = [u for u in season_updates if u]
-        if valid_season_updates:
-            num_clients = len(valid_season_updates)
-            print(f"Aggregating season updates from {num_clients} clients.")
-            for key in valid_season_updates[0].keys():
-                # 简单平均
-                aggregated_tensor = torch.stack([u[key] for u in valid_season_updates]).mean(dim=0)
-                agg_season_delta[key] = aggregated_tensor.to(self.device)
+        for key in keys:
+            # 收集所有客户端对当前参数的更新，并计算平均值
+            aggregated_tensor = torch.stack([update[key] for update in client_updates]).mean(dim=0)
+            agg_delta[key] = aggregated_tensor.to(self.device)
 
-        return agg_trend_delta, agg_season_delta
+        return agg_delta
 
-    def update_global_model(self, agg_trend_delta: OrderedDict, agg_season_delta: OrderedDict):
+    def update_global_model(self, agg_delta: OrderedDict):
         """用聚合后的更新量来更新全局模型"""
-        if not agg_trend_delta and not agg_season_delta:
+        if not agg_delta:
             return
+
         current_state_dict = self.global_model.state_dict()
-        if agg_trend_delta:
-            for key, value in agg_trend_delta.items():
-                if key in current_state_dict:
-                    current_state_dict[key] += value
-        if agg_season_delta:
-            for key, value in agg_season_delta.items():
-                if key in current_state_dict:
-                    current_state_dict[key] += value
+        for key, value in agg_delta.items():
+            if key in current_state_dict:
+                current_state_dict[key] += value  # 应用更新: new_weight = old_weight + delta
+
         self.global_model.load_state_dict(current_state_dict)
         print("Global model updated.")

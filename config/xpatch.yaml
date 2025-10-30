@@ -10,12 +10,3 @@ config:
   alpha: 0.3
   beta: 0.3
 
-# 2. 模型参数划分规则
-partition:
-  name_maps:
-    'net.fc8': 'personal'
-    'net.fc7': 'trend'
-    'net.fc6': 'trend'
-    'net.fc5': 'trend'
-    'net.': 'season'
-  default_partition: 'season'

@@ -8,14 +8,6 @@ training:
   lr: 0.001
   optimizer: 'adam'
 
-personalization:
-  epochs: 10
-  lr: 0.0005
-
-# 正则化设置
-regularization:
-  lambda_trend: 0.1
-  lambda_season: 0.1
 
 # 数据与设备设置
 #data:
